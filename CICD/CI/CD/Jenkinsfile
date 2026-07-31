@@ -6,7 +6,7 @@ pipeline {
         PATH               = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
 
         // CD Deployment Repository Details
-        DEPLOY_REPO_URL    = 'https://github.com/devShaik010/Ecell-deploy.git'
+        DEPLOY_REPO_URL    = 'https://github.com/itssmohammedk-code/Ecell-deploy.git'
         DEPLOY_BRANCH      = 'main'
 
         // Jenkins Credential ID for the Secret File containing Kubeconfig
