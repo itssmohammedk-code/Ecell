@@ -34,7 +34,7 @@ pipeline {
 
                     echo "Checking application manifests..."
 
-                    test -d k8s
+                    test -f 00-namespace.yaml
 
                     echo "Checking monitoring manifests..."
 
@@ -85,25 +85,25 @@ pipeline {
 
                         echo "Deploying Ecell application..."
 
-                        if [ -f "k8s/kustomization.yaml" ]; then
-                            kubectl apply -k k8s/
+                        if [ -f "kustomization.yaml" ]; then
+                            kubectl apply -k ./
                         else
-                            kubectl apply -f k8s/00-namespace.yaml
+                            kubectl apply -f 00-namespace.yaml
 
-                            if [ -f "k8s/01-secret.yaml" ]; then
-                                kubectl apply -f k8s/01-secret.yaml
+                            if [ -f "01-secret.yaml" ]; then
+                                kubectl apply -f 01-secret.yaml
                             fi
 
-                            if [ -f "k8s/02-db.yaml" ]; then
-                                kubectl apply -f k8s/02-db.yaml
+                            if [ -f "02-db.yaml" ]; then
+                                kubectl apply -f 02-db.yaml
                             fi
 
-                            if [ -f "k8s/03-backend.yaml" ]; then
-                                kubectl apply -f k8s/03-backend.yaml
+                            if [ -f "03-backend.yaml" ]; then
+                                kubectl apply -f 03-backend.yaml
                             fi
 
-                            if [ -f "k8s/04-frontend.yaml" ]; then
-                                kubectl apply -f k8s/04-frontend.yaml
+                            if [ -f "04-frontend.yaml" ]; then
+                                kubectl apply -f 04-frontend.yaml
                             fi
                         fi
                     '''
