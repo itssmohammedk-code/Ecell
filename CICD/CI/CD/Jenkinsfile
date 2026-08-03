@@ -2,84 +2,275 @@ pipeline {
     agent any
 
     environment {
-        // Ensure standard binary directories are included in shell PATH
-        PATH               = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+        PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
 
-        // CD Deployment Repository Details
-        DEPLOY_REPO_URL    = 'https://github.com/itssmohammedk-code/Ecell-deploy.git'
-        DEPLOY_BRANCH      = 'main'
+        DEPLOY_REPO_URL = 'https://github.com/itssmohammedk-code/Ecell-deploy.git'
+        DEPLOY_BRANCH = 'main'
 
-        // Jenkins Credential ID for the Secret File containing Kubeconfig
         KUBECONFIG_CRED_ID = 'k8s-kubeconfig'
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         disableConcurrentBuilds()
-        timeout(time: 20, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
         timestamps()
     }
 
     stages {
         stage('Checkout Deploy Repository') {
             steps {
-                echo "📦 Cloning Deployment Manifests Repo: ${DEPLOY_REPO_URL} (${DEPLOY_BRANCH})..."
-                git branch: "${DEPLOY_BRANCH}", url: "${DEPLOY_REPO_URL}"
+                echo "Cloning deployment repository: ${DEPLOY_REPO_URL}"
+
+                git branch: "${DEPLOY_BRANCH}",
+                    url: "${DEPLOY_REPO_URL}"
             }
         }
 
-        stage('Verify Kubeconfig & Cluster Connectivity') {
+        stage('Verify Required Files') {
             steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CRED_ID}", variable: 'KUBECONFIG')]) {
-                    echo "🔍 Testing Kubernetes connection using Jenkins Secret File..."
+                sh '''
+                    set -e
+
+                    echo "Checking application manifests..."
+
+                    test -d k8s
+
+                    echo "Checking monitoring manifests..."
+
+                    test -f k8s/monitoring/00-monitoring-namespace.yaml
+                    test -f k8s/monitoring/01-prometheus-rbac.yaml
+                    test -f k8s/monitoring/02-prometheus-config.yaml
+                    test -f k8s/monitoring/03-prometheus-deployment.yaml
+                    test -f k8s/monitoring/04-prometheus-service.yaml
+                    test -f k8s/monitoring/05-grafana-datasource.yaml
+                    test -f k8s/monitoring/06-grafana-deployment.yaml
+                    test -f k8s/monitoring/07-grafana-service.yaml
+
+                    echo "All required files are present."
+                '''
+            }
+        }
+
+        stage('Verify Cluster Connectivity') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
                     sh '''
-                        echo "✅ Kubeconfig loaded dynamically from Jenkins Credentials"
+                        set -e
+
+                        echo "Testing Kubernetes connection..."
+
                         kubectl cluster-info
-                        kubectl get nodes
+                        kubectl get nodes -o wide
                     '''
                 }
             }
         }
 
-        stage('Deploy to Kubernetes Cluster') {
+        stage('Deploy Application') {
             steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CRED_ID}", variable: 'KUBECONFIG')]) {
-                    echo "🚀 Applying Kubernetes Manifests..."
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
                     sh '''
-                        if [ -d "k8s" ] && [ -f "k8s/kustomization.yaml" ]; then
-                            echo "Applying k8s/ directory via Kustomize..."
+                        set -e
+
+                        echo "Deploying Ecell application..."
+
+                        if [ -f "k8s/kustomization.yaml" ]; then
                             kubectl apply -k k8s/
-                        elif [ -d "k8s" ]; then
-                            echo "Applying k8s/ directory..."
-                            kubectl apply -f k8s/
-                        elif [ -f "kustomization.yaml" ]; then
-                            echo "Applying root directory via Kustomize..."
-                            kubectl apply -k .
-                        elif [ -f "ecell-deploy.yaml" ]; then
-                            echo "Applying ecell-deploy.yaml..."
-                            kubectl apply -f ecell-deploy.yaml
                         else
-                            echo "Applying individual manifest files..."
-                            kubectl apply -f 00-namespace.yaml -f 01-secret.yaml -f 02-db.yaml -f 03-backend.yaml -f 04-frontend.yaml
+                            kubectl apply -f k8s/00-namespace.yaml
+
+                            if [ -f "k8s/01-secret.yaml" ]; then
+                                kubectl apply -f k8s/01-secret.yaml
+                            fi
+
+                            if [ -f "k8s/02-db.yaml" ]; then
+                                kubectl apply -f k8s/02-db.yaml
+                            fi
+
+                            if [ -f "k8s/03-backend.yaml" ]; then
+                                kubectl apply -f k8s/03-backend.yaml
+                            fi
+
+                            if [ -f "k8s/04-frontend.yaml" ]; then
+                                kubectl apply -f k8s/04-frontend.yaml
+                            fi
                         fi
                     '''
                 }
             }
         }
 
-        stage('Verify Deployment Rollout') {
+        stage('Verify Application Rollout') {
             steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CRED_ID}", variable: 'KUBECONFIG')]) {
-                    echo "⏳ Waiting for Rollout to complete..."
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
                     sh '''
-                        echo "Checking PostgreSQL Rollout..."
-                        kubectl rollout status deployment/ecell-db -n ecell --timeout=120s || true
+                        set -e
 
-                        echo "Checking Backend Rollout..."
-                        kubectl rollout status deployment/ecell-backend -n ecell --timeout=120s
+                        echo "Checking PostgreSQL rollout..."
+                        kubectl rollout status deployment/ecell-db \
+                            -n ecell \
+                            --timeout=180s
 
-                        echo "Checking Frontend Rollout..."
-                        kubectl rollout status deployment/ecell-frontend -n ecell --timeout=120s
+                        echo "Checking backend rollout..."
+                        kubectl rollout status deployment/ecell-backend \
+                            -n ecell \
+                            --timeout=180s
+
+                        echo "Checking frontend rollout..."
+                        kubectl rollout status deployment/ecell-frontend \
+                            -n ecell \
+                            --timeout=180s
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Monitoring Namespace and RBAC') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Creating monitoring namespace..."
+
+                        kubectl apply \
+                            -f k8s/monitoring/00-monitoring-namespace.yaml
+
+                        echo "Creating Prometheus permissions..."
+
+                        kubectl apply \
+                            -f k8s/monitoring/01-prometheus-rbac.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Prometheus') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Deploying Prometheus..."
+
+                        kubectl apply \
+                            -f k8s/monitoring/02-prometheus-config.yaml
+
+                        kubectl apply \
+                            -f k8s/monitoring/03-prometheus-deployment.yaml
+
+                        kubectl apply \
+                            -f k8s/monitoring/04-prometheus-service.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Prometheus') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Waiting for Prometheus rollout..."
+
+                        kubectl rollout status deployment/prometheus \
+                            -n monitoring \
+                            --timeout=180s
+
+                        kubectl get pods \
+                            -n monitoring \
+                            -l app=prometheus \
+                            -o wide
+
+                        kubectl get service prometheus \
+                            -n monitoring
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Grafana') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Deploying Grafana..."
+
+                        kubectl apply \
+                            -f k8s/monitoring/05-grafana-datasource.yaml
+
+                        kubectl apply \
+                            -f k8s/monitoring/06-grafana-deployment.yaml
+
+                        kubectl apply \
+                            -f k8s/monitoring/07-grafana-service.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Grafana') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Waiting for Grafana rollout..."
+
+                        kubectl rollout status deployment/grafana \
+                            -n monitoring \
+                            --timeout=180s
+
+                        kubectl get pods \
+                            -n monitoring \
+                            -l app=grafana \
+                            -o wide
+
+                        kubectl get service grafana \
+                            -n monitoring
                     '''
                 }
             }
@@ -87,9 +278,25 @@ pipeline {
 
         stage('Deployment Status Summary') {
             steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CRED_ID}", variable: 'KUBECONFIG')]) {
-                    echo "📊 Current Resources in 'ecell' Namespace:"
-                    sh 'kubectl get all,pvc,secret -n ecell'
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED_ID}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        echo "Application resources:"
+                        kubectl get all,pvc -n ecell
+
+                        echo ""
+                        echo "Monitoring resources:"
+                        kubectl get all -n monitoring
+
+                        echo ""
+                        echo "Monitoring access ports:"
+                        echo "Prometheus: http://EC2-PUBLIC-IP:30090"
+                        echo "Grafana:    http://EC2-PUBLIC-IP:30300"
+                    '''
                 }
             }
         }
@@ -97,10 +304,35 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Continuous Deployment to Kubernetes Succeeded!"
+            echo "Application, Prometheus and Grafana deployed successfully."
+            echo "Prometheus NodePort: 30090"
+            echo "Grafana NodePort: 30300"
         }
+
         failure {
-            echo "❌ Continuous Deployment Failed. Check build logs."
+            echo "Continuous Deployment failed. Check the Jenkins logs."
+
+            withCredentials([
+                file(
+                    credentialsId: "${KUBECONFIG_CRED_ID}",
+                    variable: 'KUBECONFIG'
+                )
+            ]) {
+                sh '''
+                    echo "Monitoring pod status:"
+                    kubectl get pods -n monitoring -o wide || true
+
+                    echo "Recent monitoring events:"
+                    kubectl get events \
+                        -n monitoring \
+                        --sort-by=.metadata.creationTimestamp \
+                        | tail -30 || true
+                '''
+            }
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
